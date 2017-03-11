@@ -10,6 +10,7 @@ import android.hardware.Camera;
 import android.view.MotionEvent;
 import android.view.TextureView;
 import android.os.AsyncTask;
+import android.util.Log;
 
 import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.ReactContext;
@@ -36,6 +37,17 @@ class RCTCameraViewFinder extends TextureView implements TextureView.SurfaceText
     private boolean _isStopping;
     private Camera _camera;
     private float mFingerSpacing;
+
+    private static Camera.Parameters getCameraParameters(Camera camera) {
+        try {
+            return camera != null ? camera.getParameters() : null;
+        }
+        catch (RuntimeException e) {
+            Log.w("react-native-camera", "ReactNativeCamera: Error getting camera parameters!", e);
+            // The camera has been released
+            return null;
+        }
+    }
 
     // concurrency lock for barcode scanner to avoid flooding the runtime
     public static volatile boolean barcodeScannerTaskLock = false;
@@ -125,7 +137,7 @@ class RCTCameraViewFinder extends TextureView implements TextureView.SurfaceText
             _isStarting = true;
             try {
                 _camera = RCTCamera.getInstance().acquireCameraInstance(_cameraType);
-                Camera.Parameters parameters = _camera.getParameters();
+                Camera.Parameters parameters = getCameraParameters(_camera);
                 // set autofocus
                 List<String> focusModes = parameters.getSupportedFocusModes();
                 if (focusModes.contains(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE)) {
@@ -281,8 +293,14 @@ class RCTCameraViewFinder extends TextureView implements TextureView.SurfaceText
                 return null;
             }
 
-            Camera.Size size = camera.getParameters().getPreviewSize();
+            Camera.Parameters parameters = getCameraParameters(camera);
+            if (parameters == null) {
+                // The camera was released after onPreviewFrame() was called
+                // but before this async task actually ran
+                return null;
+            }
 
+            Camera.Size size = parameters.getPreviewSize();
             int width = size.width;
             int height = size.height;
 
@@ -294,6 +312,7 @@ class RCTCameraViewFinder extends TextureView implements TextureView.SurfaceText
                   rotated[x * height + height - y - 1] = imageData[x + y * width];
                 }
               }
+
               width = size.height;
               height = size.width;
               imageData = rotated;
@@ -322,23 +341,24 @@ class RCTCameraViewFinder extends TextureView implements TextureView.SurfaceText
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        // Get the pointer ID
-        Camera.Parameters params = _camera.getParameters();
-        int action = event.getAction();
+        Camera.Parameters params = getCameraParameters(_camera);
+        if (params != null) {
+            // Get the pointer ID
+            int action = event.getAction();
 
-
-        if (event.getPointerCount() > 1) {
-            // handle multi-touch events
-            if (action == MotionEvent.ACTION_POINTER_DOWN) {
-                mFingerSpacing = getFingerSpacing(event);
-            } else if (action == MotionEvent.ACTION_MOVE && params.isZoomSupported()) {
-                _camera.cancelAutoFocus();
-                handleZoom(event, params);
-            }
-        } else {
-            // handle single touch events
-            if (action == MotionEvent.ACTION_UP) {
-                handleFocus(event, params);
+            if (event.getPointerCount() > 1) {
+                // handle multi-touch events
+                if (action == MotionEvent.ACTION_POINTER_DOWN) {
+                    mFingerSpacing = getFingerSpacing(event);
+                } else if (action == MotionEvent.ACTION_MOVE && params.isZoomSupported()) {
+                    _camera.cancelAutoFocus();
+                    handleZoom(event, params);
+                }
+            } else {
+                // handle single touch events
+                if (action == MotionEvent.ACTION_UP) {
+                    handleFocus(event, params);
+                }
             }
         }
         return true;
